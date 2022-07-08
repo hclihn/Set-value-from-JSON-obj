@@ -196,10 +196,6 @@ func ExtractFromJSONObj(jObj interface{}, names []string, target interface{}) er
   for _, name := range names {
     //fmt.Printf("-> Set value for path %q\n", name)
     pi := NewPathInfo(name)
-    jv, err := FindElement(rj, 0, pi)
-    if err != nil {
-      return fmt.Errorf("failed to find JSON object from path %q: %w", name, err)
-    }
     tv, err := FindElement(rv, 0, pi)
     if err != nil {
       return fmt.Errorf("failed to find struct object from path %q: %w", name, err)
@@ -209,6 +205,10 @@ func ExtractFromJSONObj(jObj interface{}, names []string, target interface{}) er
         return fmt.Errorf("struct data from path %q can't take its address", name)
       }
       tv = tv.Addr()
+    }
+    jv, err := FindElement(rj, 0, pi)
+    if err != nil {
+      return fmt.Errorf("failed to find JSON object from path %q: %w", name, err)
     }
     if b, err := json.Marshal(jv.Interface()); err != nil {
   		return fmt.Errorf("failed to serialize JOSN object at path %q: %w", name, err)
