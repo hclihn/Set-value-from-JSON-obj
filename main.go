@@ -143,7 +143,17 @@ func FindElement(v reflect.Value, idx int, pi *PathInfo) (reflect.Value, error) 
       if m, err := ParseTag(field.Tag); err != nil {
         return zeroVal, fmt.Errorf("failed to parse struct field %q tag (%q): %w", n, field.Tag, err)
       } else if tName, ok := m["json"]; ok {
-        n = tName
+        tFields := strings.Split(tName, ",")
+        // no leading and trailing space trimming for tag fields in json.Marshal!
+        if tFields[0] == "-" {
+          if len(tFields) == 1 { // this field should be skipped by JSON
+            continue
+          }
+          // use '-' as the name
+        } 
+        if tFields[0] != "" {
+          n = tFields[0]
+        }
       }
       if n != p {
         continue
@@ -152,12 +162,13 @@ func FindElement(v reflect.Value, idx int, pi *PathInfo) (reflect.Value, error) 
         return zeroVal, fmt.Errorf("path element %q is not an exported struct field (%s) at path %q", p, field.Name, pi.FormatPath(idx))
       }
       val := v.FieldByIndex(field.Index)
-      if val.Kind() == reflect.Ptr && val.IsNil() { // nil pointer
-        //fmt.Printf("--> %q: nil pointer, %#v\n", p, field)
+      if field.Type.Kind() == reflect.Ptr && val.IsNil() { // nil pointer
+        if !val.CanSet() {
+          return zeroVal, fmt.Errorf("struct field (%s) at path element %q of path %q is a nil pointer, but can't be set to any value", field.Name, p, pi.FormatPath(idx))
+        }
         newVal := reflect.New(field.Type.Elem())
         val.Set(newVal)
-        //fmt.Printf("--> %q: kind=%s, %#v\n", p, newVal.Elem().Type(), newVal)
-        val = newVal
+        val = newVal.Elem() // the actual data, not the pointer!
       }
       return FindElement(val, idx+1, pi)
     }
@@ -193,15 +204,16 @@ func ExtractFromJSONObj(jObj interface{}, names []string, target interface{}) er
     if err != nil {
       return fmt.Errorf("failed to find struct object from path %q: %w", name, err)
     }
+    if tv.Kind() != reflect.Ptr { // make sure we have apointer here!
+      if !tv.CanAddr() {
+        return fmt.Errorf("struct data from path %q can't take its address", name)
+      }
+      tv = tv.Addr()
+    }
     if b, err := json.Marshal(jv.Interface()); err != nil {
   		return fmt.Errorf("failed to serialize JOSN object at path %q: %w", name, err)
-  	} else {
-      if tv.Kind() != reflect.Ptr {
-        tv = tv.Addr()
-      }
-      if err := json.Unmarshal(b, tv.Interface()); err != nil {
+  	} else if err := json.Unmarshal(b, tv.Interface()); err != nil {
   		  return fmt.Errorf("failed to set value of target struct at path %q: %w", name, err)
-      }
   	}
   }
   return nil
@@ -248,8 +260,22 @@ func ExtractValuesFromJSONObj(jObj interface{}, names []string, target interface
     if !field.IsExported() {
       return fmt.Errorf("field %q is not exported", n)
     }
-    if tName := field.Tag.Get("json"); tName != "" {
-      n = tName
+    // convert to JSON name if applicable
+    if m, err := ParseTag(field.Tag); err != nil {
+      return fmt.Errorf("failed to parse struct field %q tag (%q): %w", n, field.Tag, err)
+    } else if tName, ok := m["json"]; ok {
+      tFields := strings.Split(tName, ",")
+      // no leading and trailing space trimming for tag fields in json.Marshal!
+      if tFields[0] == "-" {
+        if len(tFields) == 1 { // this field should be skipped by JSON
+          continue
+        }
+        // use '-' as the name
+      } 
+      // fmt.Printf("tName: %q, tFields: %q\n", tName, tFields)
+      if tFields[0] != "" {
+        n = tFields[0]
+      }
     }
     if err := ExtractValueFromJSONObj(jObj, n, rv.FieldByIndex(field.Index).Addr().Interface()); err != nil {
       return fmt.Errorf("failed to extract field %q: %w", n, err)
@@ -363,7 +389,7 @@ type EnvInfo struct {
 }
 
 type CabServerConfig struct {
-	URLPrefix             string    `json:"url_prefix"`
+	URLPrefix             string    `json:"url_prefix,omitempty"`
 	SupportsGzippedUpload bool      `json:"supports_gzipped_upload"`
   ChunkSize uint `json:"chunk_size"`
 	SupportsLogAppend     bool      `json:"supports_log_append"`
@@ -373,11 +399,13 @@ type CabServerConfig struct {
 }
 
 type ContextInfo struct {
-  Status             string
+  NotHere bool `json:"-"`
+  Dash string `json:"-,"`
+  Status             string `json:",omitempty"`
   CabSvrConfig *CabServerConfig
   ImageManifest     Manifest
   UpCount            int   
-  NotHere bool
+  TheMap map[int]string 
 }
 
 func main() {
@@ -441,7 +469,7 @@ func main() {
 	fmt.Printf("Context jObj: %#v\n", jObj)
   { var cfg ContextInfo
     fmt.Println("\nContext Extraction by paths...")
-    if err := ExtractFromJSONObj(jObj, []string{"CabSvrConfig","ImageManifest"}, &cfg); err != nil {
+    if err := ExtractFromJSONObj(jObj, []string{"CabSvrConfig","ImageManifest", "TheMap/"}, &cfg); err != nil {
       fmt.Println("ERROR:", err)
       return
     }
@@ -502,6 +530,10 @@ const (
       "name": "hcl_test14",
       "url_prefix": "hcl_test14"
     }
+  },
+  "TheMap": {
+    "1": "step 1",
+    "2": "step 2"
   },
   "Extra": true
 }
